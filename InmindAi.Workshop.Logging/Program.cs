@@ -1,16 +1,16 @@
 using Bogus;
+using HealthChecks.UI.Client;
 using InmindAi.Workshop.Logging.Application.Contracts.Dtos;
 using InmindAi.Workshop.Logging.Application.Contracts.Services;
 using InmindAi.Workshop.Logging.Application.Orders;
 using InmindAi.Workshop.Logging.Application.Products;
+using InmindAi.Workshop.Logging.Correlation;
 using InmindAi.Workshop.Logging.Domain;
 using InmindAi.Workshop.Logging.Errors;
 using InmindAi.Workshop.Logging.Infrastructure;
 using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
-using OpenTelemetry.Exporter;
-using OpenTelemetry.Logs;
-using OpenTelemetry.Resources;
 using Scalar.AspNetCore;
 using Serilog;
 using Serilog.Sinks.OpenTelemetry;
@@ -22,6 +22,12 @@ var builder = WebApplication.CreateBuilder(args);
 
 Log.Logger = new LoggerConfiguration()
     .Filter.ByExcluding(logEvent => logEvent.Properties.ContainsKey("Password")) // Implementing Serilog Filter to exclude sensitive data such as password.
+    .Enrich.WithCorrelationIdHeader("X-Correlation-Id")
+    .Enrich.WithCorrelationId()
+    .Enrich.WithEnvironmentName()
+    .Enrich.WithThreadName()
+    .Enrich.WithMachineName()
+    .Enrich.WithProperty("EnvironmentTester", builder.Environment.EnvironmentName) // Enrich from serilog With custom properties.
     .WriteTo.Console()
     .WriteTo.OpenTelemetry(x =>
     {
@@ -35,7 +41,7 @@ Log.Logger = new LoggerConfiguration()
         x.ResourceAttributes = new Dictionary<string, object>()
         {
             ["service.name"] = "LoggingWorkshop",
-            ["deployment.environment"] = builder.Environment.EnvironmentName
+            ["opentelemetry.enricher"] = "OpenTelemetry" //Enrich using OpenTelemetry
         };
     })
     .CreateLogger();
@@ -44,7 +50,20 @@ Log.Logger = new LoggerConfiguration()
 
 #region Service Registration
 
+builder.Services.AddHttpContextAccessor(); // We need to add this if we want to visualize properties from http Request / Client info I.E: Headers in our case x-correlation-Id
 builder.Services.AddSerilog();
+
+builder.Services.AddHealthChecks()
+    //.AddCheck<DatabaseHealthCheck>("Database") // I disabled my created database health check since we can use the library.
+    .AddSqlite(builder.Configuration.GetConnectionString("DefaultConnection")!, name: "Sqlite database", tags: ["Database"]);
+
+builder.Services.AddHealthChecksUI(setup =>
+{
+    setup.AddHealthCheckEndpoint("Application", "/health"); //mapping to UI to pull from the health endpoint
+})
+    .AddInMemoryStorage();
+
+builder.Services.AddCorrelationId(); //This is the custom one created.
 
 // Configuring telemetry with OpenTelemetry
 
@@ -144,6 +163,22 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+app.UseCorrelationId(); // customely created
+
+app.MapHealthChecks("/health", new HealthCheckOptions()
+{
+    ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse
+});
+//.RequireHost("*:5001") // In order to restrict the access to the health endpoint, you can use this method.
+//.RequireAuthorization(); // Or you can use this method to require authorization.
+
+app.MapHealthChecksUI(options =>
+{
+    options.UseRelativeApiPath = true;
+    options.PageTitle = "Logging Workshop HealthChecks";
+    options.UIPath = "/health-ui";
+});
 
 #endregion
 
