@@ -22,7 +22,7 @@ public class OrderService(WorkShopDbContext context, ILogger<OrderService> logge
         }
         catch (UniqueConstraintException ex)
         {
-            _logger.LogWarning("An order with the same reference already exists: {Reference}, {Message}", order.Reference, ex.Message);
+            _logger.LogError("An order with the same reference already exists: {Reference}, {Message}", order.Reference, ex.Message);
             throw new ServiceException(StatusCodes.Status403Forbidden, OrdersErrorCodes.OrderWithSameReferenceAlreadyExists);
         }
         _logger.LogInformation("An order has been created succesfully with Id: {Id}", order.Id);
